@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI内存消耗结构性分析报告</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;600;700&family=JetBrains+Mono:wght@300;400;600&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0a0a0f;
+    --paper: #f5f0e8;
+    --paper-dark: #ede8dc;
+    --accent: #c8401a;
+    --accent-light: #e85d2f;
+    --gold: #b8860b;
+    --gold-light: #d4a017;
+    --teal: #1a6b6b;
+    --teal-light: #2a9090;
+    --muted: #6b6560;
+    --rule: rgba(10,10,15,0.12);
+    --shadow: 0 4px 32px rgba(10,10,15,0.10);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Noto Serif SC', serif;
+    font-size: 16px;
+    line-height: 1.85;
+    overflow-x: hidden;
+  }
+
+  /* ── COVER ── */
+  .cover {
+    min-height: 100vh;
+    background: var(--ink);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 80px 10vw;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cover::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 40% at 80% 30%, rgba(200,64,26,0.18) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 60% at 20% 80%, rgba(26,107,107,0.15) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .cover-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.25em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 32px;
+    opacity: 0;
+    animation: fadeUp 0.8s 0.2s forwards;
+  }
+
+  .cover-title {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(42px, 6vw, 80px);
+    font-weight: 900;
+    color: var(--paper);
+    line-height: 1.1;
+    max-width: 800px;
+    margin-bottom: 24px;
+    opacity: 0;
+    animation: fadeUp 0.8s 0.4s forwards;
+  }
+
+  .cover-title em {
+    font-style: italic;
+    color: var(--accent-light);
+  }
+
+  .cover-subtitle {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 18px;
+    font-weight: 300;
+    color: rgba(245,240,232,0.65);
+    max-width: 560px;
+    line-height: 1.7;
+    margin-bottom: 56px;
+    opacity: 0;
+    animation: fadeUp 0.8s 0.6s forwards;
+  }
+
+  .cover-meta {
+    display: flex;
+    gap: 48px;
+    opacity: 0;
+    animation: fadeUp 0.8s 0.8s forwards;
+  }
+
+  .cover-meta-item {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: rgba(245,240,232,0.4);
+    letter-spacing: 0.1em;
+  }
+
+  .cover-meta-item span {
+    display: block;
+    font-size: 14px;
+    color: rgba(245,240,232,0.75);
+    margin-top: 4px;
+    letter-spacing: 0;
+  }
+
+  .cover-decoration {
+    position: absolute;
+    right: 8vw;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 320px;
+    height: 320px;
+    opacity: 0;
+    animation: fadeIn 1.2s 1s forwards;
+  }
+
+  .cover-scroll {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    animation: fadeIn 0.8s 1.2s forwards;
+  }
+
+  .scroll-line {
+    width: 1px;
+    height: 48px;
+    background: linear-gradient(to bottom, rgba(245,240,232,0.5), transparent);
+    animation: scrollPulse 2s 1.5s infinite;
+  }
+
+  .scroll-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: rgba(245,240,232,0.3);
+    text-transform: uppercase;
+  }
+
+  /* ── LAYOUT ── */
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 40px;
+  }
+
+  /* ── SECTION ── */
+  .section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--rule);
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.7s, transform 0.7s;
+  }
+
+  .section.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .section-number {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  .section-title {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(24px, 3.5vw, 38px);
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 32px;
+    color: var(--ink);
+  }
+
+  .section-title::after {
+    content: '';
+    display: block;
+    width: 48px;
+    height: 3px;
+    background: var(--accent);
+    margin-top: 16px;
+  }
+
+  p {
+    color: #2a2520;
+    margin-bottom: 20px;
+    font-size: 15.5px;
+  }
+
+  /* ── PULLQUOTE ── */
+  .pullquote {
+    border-left: 3px solid var(--accent);
+    padding: 20px 32px;
+    margin: 40px 0;
+    background: rgba(200,64,26,0.04);
+  }
+
+  .pullquote p {
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.6;
+    color: var(--ink);
+    margin: 0;
+    font-style: italic;
+  }
+
+  /* ── STAT CARDS ── */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 40px 0;
+  }
+
+  .stat-card {
+    background: var(--paper);
+    padding: 28px 24px;
+    text-align: center;
+    transition: background 0.2s;
+  }
+
+  .stat-card:hover { background: var(--paper-dark); }
+
+  .stat-value {
+    font-family: 'Playfair Display', serif;
+    font-size: 42px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+
+  .stat-value.accent { color: var(--accent); }
+  .stat-value.gold { color: var(--gold); }
+  .stat-value.teal { color: var(--teal); }
+
+  .stat-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+
+  /* ── TABLE ── */
+  .report-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 32px 0;
+    font-size: 14px;
+  }
+
+  .report-table th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 2px solid var(--ink);
+    background: var(--paper-dark);
+  }
+
+  .report-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+
+  .report-table tr:last-child td { border-bottom: none; }
+  .report-table tr:hover td { background: rgba(200,64,26,0.03); }
+
+  .badge {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+
+  .badge-red { background: rgba(200,64,26,0.12); color: var(--accent); }
+  .badge-teal { background: rgba(26,107,107,0.12); color: var(--teal); }
+  .badge-gold { background: rgba(184,134,11,0.12); color: var(--gold); }
+  .badge-gray { background: rgba(107,101,96,0.12); color: var(--muted); }
+
+  /* ── CODE BLOCK ── */
+  .code-block {
+    background: var(--ink);
+    color: #d4cdc4;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    padding: 28px 32px;
+    margin: 32px 0;
+    overflow-x: auto;
+    border-left: 3px solid var(--accent);
+    position: relative;
+  }
+
+  .code-block .comment { color: #6b8a6b; }
+  .code-block .number { color: var(--gold-light); }
+  .code-block .keyword { color: var(--accent-light); }
+  .code-block .label { color: #7ab4b4; }
+
+  /* ── COMPARISON BAR ── */
+  .compare-section { margin: 40px 0; }
+
+  .compare-row {
+    display: grid;
+    grid-template-columns: 140px 1fr 80px;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .compare-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  .bar-track {
+    height: 10px;
+    background: rgba(10,10,15,0.08);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    animation: barGrow 1.2s cubic-bezier(0.4,0,0.2,1) forwards;
+    transform-origin: left;
+    transform: scaleX(0);
+  }
+
+  .bar-fill.red { background: var(--accent); }
+  .bar-fill.teal { background: var(--teal); }
+  .bar-fill.gold { background: var(--gold); }
+  .bar-fill.gray { background: var(--muted); }
+
+  .bar-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  /* ── CALLOUT ── */
+  .callout {
+    border: 1px solid var(--rule);
+    padding: 28px 32px;
+    margin: 32px 0;
+    position: relative;
+    background: var(--paper-dark);
+  }
+
+  .callout::before {
+    content: attr(data-icon);
+    position: absolute;
+    top: -12px;
+    left: 24px;
+    font-size: 20px;
+    background: var(--paper-dark);
+    padding: 0 8px;
+    line-height: 1;
+  }
+
+  .callout h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .callout p { margin: 0; font-size: 15px; }
+
+  /* ── MARKET TIMELINE ── */
+  .timeline {
+    position: relative;
+    padding-left: 32px;
+    margin: 32px 0;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background: linear-gradient(to bottom, var(--accent), var(--teal));
+  }
+
+  .timeline-item {
+    position: relative;
+    margin-bottom: 28px;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .timeline-item:last-child { border-bottom: none; margin-bottom: 0; }
+
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -37px;
+    top: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--paper);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .timeline-year {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .timeline-content { font-size: 14.5px; line-height: 1.7; }
+
+  /* ── INVESTMENT TABLE ── */
+  .invest-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 32px 0;
+  }
+
+  .invest-tier {
+    background: var(--paper);
+    padding: 28px 24px;
+  }
+
+  .invest-tier-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  .invest-tier-label.t1 { color: var(--accent); }
+  .invest-tier-label.t2 { color: var(--teal); }
+  .invest-tier-label.t3 { color: var(--gold); }
+
+  .invest-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 14px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .invest-item::before {
+    content: '→';
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .t1 .invest-item::before { color: var(--accent); }
+  .t2 .invest-item::before { color: var(--teal); }
+  .t3 .invest-item::before { color: var(--gold); }
+
+  .invest-company { font-weight: 600; }
+  .invest-reason { color: var(--muted); font-size: 13px; display: block; margin-top: 2px; }
+
+  /* ── FOOTER ── */
+  .report-footer {
+    background: var(--ink);
+    color: rgba(245,240,232,0.45);
+    padding: 48px 40px;
+    text-align: center;
+  }
+
+  .report-footer p {
+    color: rgba(245,240,232,0.45);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    margin: 0;
+  }
+
+  /* ── NAV ── */
+  .toc {
+    position: fixed;
+    right: 32px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100;
+  }
+
+  .toc-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(10,10,15,0.2);
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+  }
+
+  .toc-dot:hover, .toc-dot.active {
+    background: var(--accent);
+    transform: scale(1.5);
+  }
+
+  .toc-dot::after {
+    content: attr(data-label);
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    white-space: nowrap;
+    color: var(--muted);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+  }
+
+  .toc-dot:hover::after { opacity: 1; }
+
+  /* ── ANIMATIONS ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes scrollPulse {
+    0%, 100% { opacity: 0.3; transform: scaleY(1); }
+    50%       { opacity: 0.8; transform: scaleY(1.2); }
+  }
+
+  @keyframes barGrow {
+    from { transform: scaleX(0); }
+    to   { transform: scaleX(1); }
+  }
+
+  /* ── HIGHLIGHT ── */
+  .hl-red { color: var(--accent); font-weight: 600; }
+  .hl-teal { color: var(--teal); font-weight: 600; }
+  .hl-gold { color: var(--gold); font-weight: 600; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    margin: 32px 0;
+  }
+
+  .col-card {
+    border: 1px solid var(--rule);
+    padding: 24px;
+    background: var(--paper-dark);
+  }
+
+  .col-card h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  .col-card.red h4 { color: var(--accent); }
+  .col-card.teal h4 { color: var(--teal); }
+
+  .col-card ul {
+    list-style: none;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .col-card ul li {
+    padding: 4px 0;
+    border-bottom: 1px solid var(--rule);
+    padding-left: 16px;
+    position: relative;
+    color: #2a2520;
+  }
+
+  .col-card ul li:last-child { border-bottom: none; }
+
+  .col-card.red ul li::before { content: '▸'; position: absolute; left: 0; color: var(--accent); font-size: 10px; top: 7px; }
+  .col-card.teal ul li::before { content: '▸'; position: absolute; left: 0; color: var(--teal); font-size: 10px; top: 7px; }
+
+  @media (max-width: 700px) {
+    .two-col, .invest-grid { grid-template-columns: 1fr; }
+    .toc { display: none; }
+    .cover-decoration { display: none; }
+    .cover-meta { flex-direction: column; gap: 20px; }
+    .compare-row { grid-template-columns: 100px 1fr 60px; }
+    .container { padding: 0 20px; }
+    .cover { padding: 60px 6vw; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV DOTS -->
+<nav class="toc">
+  <div class="toc-dot active" data-label="封面" onclick="scrollToSection('cover')"></div>
+  <div class="toc-dot" data-label="核心命题" onclick="scrollToSection('s1')"></div>
+  <div class="toc-dot" data-label="驱动力分析" onclick="scrollToSection('s2')"></div>
+  <div class="toc-dot" data-label="Claude场景量化" onclick="scrollToSection('s3')"></div>
+  <div class="toc-dot" data-label="市场规模" onclick="scrollToSection('s4')"></div>
+  <div class="toc-dot" data-label="投资框架" onclick="scrollToSection('s5')"></div>
+  <div class="toc-dot" data-label="结论" onclick="scrollToSection('s6')"></div>
+</nav>
+
+<!-- COVER -->
+<section class="cover" id="cover">
+  <div class="cover-eyebrow">深度研究报告 · 2026年5月</div>
+  <h1 class="cover-title">AI内存消耗的<br><em>结构性拐点</em></h1>
+  <p class="cover-subtitle">从Nvidia VR300到Claude Sonnet 4.6——解析HBM与LPDDR的需求分化、市场规模与投资价值</p>
+  <div class="cover-meta">
+    <div class="cover-meta-item">核心结论<span>HBM是AI时代最确定的稀缺资源</span></div>
+    <div class="cover-meta-item">分析维度<span>技术 · 市场 · 投资</span></div>
+    <div class="cover-meta-item">数据截止<span>2026年5月</span></div>
+  </div>
+
+  <svg class="cover-decoration" viewBox="0 0 320 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="160" cy="160" r="140" stroke="rgba(200,64,26,0.15)" stroke-width="1"/>
+    <circle cx="160" cy="160" r="100" stroke="rgba(200,64,26,0.10)" stroke-width="1"/>
+    <circle cx="160" cy="160" r="60" stroke="rgba(200,64,26,0.08)" stroke-width="1"/>
+    <!-- Grid lines -->
+    <line x1="20" y1="160" x2="300" y2="160" stroke="rgba(200,64,26,0.08)" stroke-width="1"/>
+    <line x1="160" y1="20" x2="160" y2="300" stroke="rgba(200,64,26,0.08)" stroke-width="1"/>
+    <line x1="60" y1="60" x2="260" y2="260" stroke="rgba(26,107,107,0.08)" stroke-width="1"/>
+    <line x1="260" y1="60" x2="60" y2="260" stroke="rgba(26,107,107,0.08)" stroke-width="1"/>
+    <!-- Data points -->
+    <circle cx="160" cy="160" r="6" fill="rgba(200,64,26,0.6)"/>
+    <circle cx="240" cy="100" r="4" fill="rgba(200,64,26,0.4)"/>
+    <circle cx="200" cy="220" r="3" fill="rgba(26,107,107,0.4)"/>
+    <circle cx="100" cy="180" r="5" fill="rgba(184,134,11,0.4)"/>
+    <circle cx="120" cy="80" r="3" fill="rgba(200,64,26,0.3)"/>
+    <!-- Exponential curve suggestion -->
+    <path d="M 60 250 Q 120 230 160 200 Q 200 170 240 100 Q 270 50 290 30" stroke="rgba(200,64,26,0.4)" stroke-width="1.5" fill="none"/>
+    <path d="M 60 250 Q 130 245 180 240 Q 230 235 280 230" stroke="rgba(107,101,96,0.3)" stroke-width="1" fill="none" stroke-dasharray="4,4"/>
+    <!-- Labels -->
+    <text x="292" y="26" font-family="monospace" font-size="8" fill="rgba(200,64,26,0.6)">AI</text>
+    <text x="284" y="228" font-family="monospace" font-size="8" fill="rgba(107,101,96,0.5)">Human</text>
+  </svg>
+
+  <div class="cover-scroll">
+    <div class="scroll-line"></div>
+    <span class="scroll-label">Scroll</span>
+  </div>
+</section>
+
+<!-- SECTION 1: 核心命题 -->
+<section class="section" id="s1">
+  <div class="container">
+    <div class="section-number">01 · 核心命题</div>
+    <h2 class="section-title">一个被低估的结构性拐点</h2>
+
+    <p>一个数据对比，揭示了AI时代最深层的内存消耗逻辑转变：<span class="hl-red">Nvidia VR300单个产品的LPDDR5年消耗量（约5.5EB）</span>，已经超越或等同于<span class="hl-teal">全球手机市场的LPDDR消耗总量</span>——而这还没有算入HBM。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-value accent">5.5EB</div>
+        <div class="stat-label">VR300年LPDDR5<br>消耗量（单产品）</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value teal">≈5.6EB</div>
+        <div class="stat-label">全球手机市场<br>LPDDR年消耗（2027E）</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value gold">3×</div>
+        <div class="stat-label">人类消费电子内存<br>10年增长倍数</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value accent">2×</div>
+        <div class="stat-label">AI内存需求<br>每代架构增长倍数</div>
+      </div>
+    </div>
+
+    <div class="pullquote">
+      <p>AI对内存的消耗是人类消费电子的倍数越来越大，呈指数型拉开差距。唯一限制这个差距扩大的，只有产能扩充的速度。</p>
+    </div>
+
+    <p>手机市场均配6-7GB LPDDR，即便2027年销量从12亿台衰退至8亿台，总消耗量也仅约5.6EB——与<span class="hl-red">一家公司的单个GPU产品</span>持平。人类消费内存十年仅增长3倍（7.xGB→23GB均配），而AI内存需求每一代架构都在翻倍。这不是线性的领先，是指数型的碾压。</p>
+
+    <div class="two-col">
+      <div class="col-card red">
+        <h4>AI内存增长曲线</h4>
+        <ul>
+          <li>每代架构：需求翻倍</li>
+          <li>驱动力：多变量乘法关系</li>
+          <li>增长性质：真正的指数增长</li>
+          <li>代表：HBM每代容量翻倍+带宽翻倍</li>
+          <li>上限：尚未触及Scaling Wall</li>
+        </ul>
+      </div>
+      <div class="col-card teal">
+        <h4>人类消费电子曲线</h4>
+        <ul>
+          <li>10年周期：总量约3倍</li>
+          <li>驱动力：线性需求扩展</li>
+          <li>增长性质：温和线性增长</li>
+          <li>代表：DDR 3% CAGR至2030</li>
+          <li>上限：屏幕分辨率/人眼极限</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SECTION 2: 驱动力 -->
+<section class="section" id="s2">
+  <div class="container">
+    <div class="section-number">02 · 驱动力分析</div>
+    <h2 class="section-title">五大驱动力的内存影响拆解</h2>
+
+    <p>AI内存需求的指数增长并非单一因素所致，而是五大驱动力的<span class="hl-red">乘法叠加</span>。每个驱动力对HBM和LPDDR5的影响机制、量级完全不同。</p>
+
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>驱动力</th>
+          <th>主要影响内存</th>
+          <th>增长性质</th>
+          <th>量级评估</th>
+          <th>重要性</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>模型参数规模</strong><br><small>Scaling Law持续有效</small></td>
+          <td><span class="badge badge-red">HBM 刚性</span></td>
+          <td>指数，每代2-10×</td>
+          <td>175B→1T→10T参数</td>
+          <td>★★★★★</td>
+        </tr>
+        <tr>
+          <td><strong>KV Cache</strong><br><small>最被低估的驱动力</small></td>
+          <td><span class="badge badge-red">HBM 最快增长</span></td>
+          <td>与上下文长度正比</td>
+          <td>4K→1M token增长256×</td>
+          <td>★★★★★</td>
+        </tr>
+        <tr>
+          <td><strong>MoE架构</strong><br><small>专家offload需求</small></td>
+          <td><span class="badge badge-teal">LPDDR 被放大</span></td>
+          <td>架构跃升式增长</td>
+          <td>非激活专家offload至CPU内存</td>
+          <td>★★★☆☆</td>
+        </tr>
+        <tr>
+          <td><strong>多模态视频</strong><br><small>token密度爆炸</small></td>
+          <td><span class="badge badge-red">HBM 剧烈增长</span></td>
+          <td>帧数×分辨率正比</td>
+          <td>60秒视频≈590K token</td>
+          <td>★★★★☆</td>
+        </tr>
+        <tr>
+          <td><strong>推理时计算</strong><br><small>o1/R1类思维链模型</small></td>
+          <td><span class="badge badge-red">HBM 新兴驱动</span></td>
+          <td>指数，2024年底规模化</td>
+          <td>推理KV Cache可超过权重本身</td>
+          <td>★★★★☆</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout" data-icon="⚡">
+      <h4>关键洞察：KV Cache是最凶猛的单项因素</h4>
+      <p>KV Cache随上下文长度<strong>线性增长</strong>，随并发数<strong>线性增长</strong>，两者均在快速增加，形成乘法效应。128K上下文×100并发=1.6TB KV Cache，全部需要在HBM中实时读写——这是DDR物理带宽无法满足的需求，不是成本问题，是物理约束。</p>
+    </div>
+
+    <h3 style="font-size:20px; margin: 40px 0 20px; font-family:'Playfair Display',serif;">HBM vs LPDDR：增长本质的不对称性</h3>
+
+    <div class="code-block">
+<span class="comment"># 内存需求增长函数对比</span>
+
+<span class="label">HBM需求</span> = f(<span class="keyword">参数量</span> × <span class="keyword">上下文长度</span> × <span class="keyword">并发数</span> × <span class="keyword">推理深度</span>)
+          <span class="comment">→ 多变量乘法关系 → 真正的指数增长</span>
+
+<span class="label">LPDDR需求</span> = f(<span class="keyword">专家offload量</span> + <span class="keyword">系统调度开销</span>)
+            <span class="comment">→ 加法关系为主 → 快速线性增长</span>
+
+<span class="comment">## 带宽要求对比（物理约束）</span>
+H100  HBM3:  <span class="number">3.35 TB/s</span>  <span class="comment">← 模型推理所需带宽量级</span>
+DDR5  CPU:   <span class="number">~0.3 TB/s</span>  <span class="comment">← 差距10×以上，无法替代</span>
+    </div>
+  </div>
+</section>
+
+<!-- SECTION 3: Claude量化 -->
+<section class="section" id="s3">
+  <div class="container">
+    <div class="section-number">03 · Claude Sonnet 4.6 场景量化</div>
+    <h2 class="section-title">典型部署场景的内存需求计算</h2>
+
+    <p>以Claude Sonnet 4.6为具体分析对象：密集型Transformer架构（非MoE），参数量估计50-100B，支持200K标准上下文窗口及1M token beta扩展，部署于H100/H200/GB200异构集群。</p>
+
+    <h3 style="font-size:18px; margin: 32px 0 20px; font-family:'Playfair Display',serif; color: var(--accent);">HBM需求：按上下文长度分级</h3>
+
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>上下文长度</th>
+          <th>KV Cache/请求</th>
+          <th>100并发总量</th>
+          <th>所需H100数（仅KV）</th>
+          <th>场景</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>32K token</td>
+          <td>~8GB</td>
+          <td>800GB</td>
+          <td>10张</td>
+          <td><span class="badge badge-teal">轻量API调用</span></td>
+        </tr>
+        <tr>
+          <td>128K token</td>
+          <td>~32GB</td>
+          <td>3.2TB</td>
+          <td>40张</td>
+          <td><span class="badge badge-gold">企业主流场景</span></td>
+        </tr>
+        <tr>
+          <td>200K token</td>
+          <td>~50GB</td>
+          <td>5TB</td>
+          <td>63张</td>
+          <td><span class="badge badge-gold">文档分析场景</span></td>
+        </tr>
+        <tr style="background: rgba(200,64,26,0.04);">
+          <td><strong>1M token (beta)</strong></td>
+          <td><strong>~250GB</strong></td>
+          <td><strong>25TB</strong></td>
+          <td><strong>313张</strong></td>
+          <td><span class="badge badge-red">超长上下文</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 style="font-size:18px; margin: 32px 0 20px; font-family:'Playfair Display',serif; color: var(--teal);">完整单节点内存需求汇总（128K上下文，100并发）</h3>
+
+    <div class="code-block">
+<span class="comment"># Claude Sonnet 4.6 · 128K上下文 · 100并发 内存需求</span>
+
+<span class="label">HBM侧（GPU）：</span>
+  模型权重（70B FP8）:    ~<span class="number">70GB</span>   <span class="comment">← 刚性占用，不可压缩</span>
+  KV Cache（100并发）:   ~<span class="number">3,200GB</span> <span class="comment">← 动态占用，主导项</span>
+  激活缓冲区:             ~<span class="number">20GB</span>   <span class="comment">← 中间计算状态</span>
+  ────────────────────────────────────
+  合计HBM需求:           ~<span class="number">3,290GB</span> <span class="comment">≈ 约42张H100(80GB)</span>
+
+<span class="label">LPDDR5侧（CPU）：</span>
+  系统内存/OS:            <span class="number">~64GB</span>
+  请求调度与批处理队列:    <span class="number">~128GB</span>
+  数据预处理pipeline:     <span class="number">~256GB</span>
+  KV Cache冷数据offload:  <span class="number">~512GB~2TB</span>
+  ────────────────────────────────────
+  合计LPDDR5需求:    <span class="number">512GB ~ 2TB</span> <span class="comment">/节点</span>
+    </div>
+
+    <div class="callout" data-icon="📌">
+      <h4>关键发现：KV Cache > 模型权重</h4>
+      <p>在128K上下文场景下，KV Cache（3,200GB）是模型权重（70GB）的<strong style="color:var(--accent)">45倍</strong>。这意味着HBM的需求主导项不是"模型有多大"，而是"上下文有多长、并发有多高"——两个变量都在快速增长。</p>
+    </div>
+
+    <h3 style="font-size:18px; margin: 32px 0 20px; font-family:'Playfair Display',serif;">Anthropic全球推理集群内存规模估算</h3>
+
+    <p>基于Colossus 1（220,000+ GPU，含H100/H200/GB200混合架构）的推算：</p>
+
+    <div class="compare-section">
+      <div class="compare-row">
+        <div class="compare-label">HBM总量</div>
+        <div class="bar-track"><div class="bar-fill red" style="--w:0.42" data-width="42%"></div></div>
+        <div class="bar-value">~25.7PB</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label">DDR5系统内存</div>
+        <div class="bar-track"><div class="bar-fill teal" style="--w:1.0" data-width="100%"></div></div>
+        <div class="bar-value">~55PB</div>
+      </div>
+    </div>
+
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>内存类型</th>
+          <th>规模</th>
+          <th>单价（2026）</th>
+          <th>估算价值</th>
+          <th>价值占比</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>HBM（各代混合）</strong></td>
+          <td>~25.7PB</td>
+          <td>~$5,000/GB</td>
+          <td><strong style="color:var(--accent)">~$128亿</strong></td>
+          <td>96%</td>
+        </tr>
+        <tr>
+          <td>DDR5/LPDDR5</td>
+          <td>~55PB</td>
+          <td>~$9.71/GB</td>
+          <td>~$5.3亿</td>
+          <td>4%</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="color:var(--accent); font-weight:600; font-size:15px;">结论：HBM的资本价值是LPDDR的约24倍，尽管物理容量仅为其一半。</p>
+  </div>
+</section>
+
+<!-- SECTION 4: 市场规模 -->
+<section class="section" id="s4">
+  <div class="container">
+    <div class="section-number">04 · 市场规模对比</div>
+    <h2 class="section-title">HBM vs LPDDR：市场分化的加速度</h2>
+
+    <p>宏观市场数据印证了微观技术分析的结论——两类内存正在进入截然不同的增长轨道。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-value accent">40%</div>
+        <div class="stat-label">HBM市场<br>CAGR（2025-2028）</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value teal">3%</div>
+        <div class="stat-label">传统DRAM市场<br>CAGR（至2030）</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value gold">$100B</div>
+        <div class="stat-label">HBM市场TAM<br>预测（2028年）</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value accent">62%</div>
+        <div class="stat-label">SK海力士<br>HBM市场份额</div>
+      </div>
+    </div>
+
+    <h3 style="font-size:18px; margin: 32px 0 20px; font-family:'Playfair Display',serif;">市场规模时间轴</h3>
+
+    <div class="timeline">
+      <div class="timeline-item">
+        <div class="timeline-year">2024</div>
+        <div class="timeline-content">
+          HBM市场：<strong>~$16B</strong> · 传统DRAM：<strong>~$80B</strong><br>
+          HBM/DRAM比值：0.2× · 差距仍大，但增速已开始分化
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-year">2025</div>
+        <div class="timeline-content">
+          HBM市场：<strong>~$35B</strong>（美银：~$34.5B）· 全部供应商产能售罄至2026年<br>
+          SK海力士超越三星成为全球DRAM市占率第一 · HBM3E成为主力产品<br>
+          传统DRAM约$80B，HBM/DRAM比值升至<strong style="color:var(--accent)">0.44×</strong>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-year">2026</div>
+        <div class="timeline-content">
+          HBM市场：<strong>~$55B</strong>（美银预测$54.6B，同比+58%）<br>
+          HBM4进入量产 · ASIC定制AI芯片HBM需求激增82%<br>
+          Anthropic接入Colossus 1（22万GPU），Claude需求超预期80倍<br>
+          DRAM成本：<strong style="color:var(--accent)">$9.71/GB，同比+158%</strong>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-year">2028E</div>
+        <div class="timeline-content">
+          HBM市场：<strong>~$100B</strong>（超过2024年整个DRAM市场规模）<br>
+          传统DRAM：~$90B · 两者市场规模首次持平<br>
+          HBM占总内存市场比例：预计超过50%
+        </div>
+      </div>
+    </div>
+
+    <h3 style="font-size:18px; margin: 40px 0 20px; font-family:'Playfair Display',serif;">市场规模差距的量化演变</h3>
+
+    <div class="compare-section">
+      <div style="margin-bottom:8px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase;">HBM市场规模（相对最大值归一化）</div>
+      <div class="compare-row">
+        <div class="compare-label">2024 · $16B</div>
+        <div class="bar-track"><div class="bar-fill red" data-width="16%"></div></div>
+        <div class="bar-value">0.2×</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label">2025 · $35B</div>
+        <div class="bar-track"><div class="bar-fill red" data-width="35%"></div></div>
+        <div class="bar-value">0.44×</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label">2026 · $55B</div>
+        <div class="bar-track"><div class="bar-fill red" data-width="55%"></div></div>
+        <div class="bar-value">0.69×</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label">2028 · $100B</div>
+        <div class="bar-track"><div class="bar-fill red" data-width="100%"></div></div>
+        <div class="bar-value">1.0×</div>
+      </div>
+
+      <div style="margin: 24px 0 8px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase;">LPDDR/DDR市场规模（同期对比）</div>
+      <div class="compare-row">
+        <div class="compare-label">2024 · $80B</div>
+        <div class="bar-track"><div class="bar-fill teal" data-width="80%"></div></div>
+        <div class="bar-value">基准</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label">2026 · $83B</div>
+        <div class="bar-track"><div class="bar-fill teal" data-width="83%"></div></div>
+        <div class="bar-value">+3%</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label">2028 · $90B</div>
+        <div class="bar-track"><div class="bar-fill teal" data-width="90%"></div></div>
+        <div class="bar-value">+13%</div>
+      </div>
+    </div>
+
+    <div class="callout" data-icon="🔑">
+      <h4>供给侧结构性约束</h4>
+      <p>HBM产能95%集中于SK海力士、三星、美光三家。HBM制造周期12-18个月，新建FAB需3-5年。先进封装（CoWoS/SoIC）是瓶颈中的瓶颈——TSMC是全球唯一具备规模量产能力的供应商。<strong style="color:var(--accent)">需求增速远超产能扩充速度，这才是真正的投资护城河。</strong></p>
+    </div>
+  </div>
+</section>
+
+<!-- SECTION 5: 投资框架 -->
+<section class="section" id="s5">
+  <div class="container">
+    <div class="section-number">05 · 投资框架</div>
+    <h2 class="section-title">按确定性分层的投资矩阵</h2>
+
+    <p>AI应用竞争格局未定，但无论谁赢，都要消耗内存——这才是"卖铲子"逻辑的最佳实践。供给弹性极低、需求弹性极高，定价权长期在供给侧。</p>
+
+    <div class="invest-grid">
+      <div class="invest-tier">
+        <div class="invest-tier-label t1">第一层 · 最确定</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:20px; font-family:'JetBrains Mono',monospace;">直接受益 · HBM供应链</div>
+        <div class="invest-item t1">
+          <div>
+            <span class="invest-company">SK海力士</span>
+            <span class="invest-reason">HBM全球市占率62%+，HBM4独供Nvidia，CoWoS先行量产</span>
+          </div>
+        </div>
+        <div class="invest-item t1">
+          <div>
+            <span class="invest-company">美光科技</span>
+            <span class="invest-reason">HBM3e份额快速提升（21%），LPDDR5同步受益，云内存业务单独建制</span>
+          </div>
+        </div>
+        <div class="invest-item t1">
+          <div>
+            <span class="invest-company">三星半导体</span>
+            <span class="invest-reason">HBM4 2026年商业量产，良率改善后反转弹性最大，三星已首发HBM4</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="invest-tier">
+        <div class="invest-tier-label t2">第二层 · 高确定</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:20px; font-family:'JetBrains Mono',monospace;">产能基础设施 · 不可替代</div>
+        <div class="invest-item t2">
+          <div>
+            <span class="invest-company">台积电</span>
+            <span class="invest-reason">CoWoS先进封装垄断地位，HBM堆叠不可绕过，12个月以上交期护城河</span>
+          </div>
+        </div>
+        <div class="invest-item t2">
+          <div>
+            <span class="invest-company">东京威力科创</span>
+            <span class="invest-reason">沉积/蚀刻关键设备，HBM层数增加（8Hi→12Hi→16Hi）直接受益</span>
+          </div>
+        </div>
+        <div class="invest-item t2">
+          <div>
+            <span class="invest-company">ASML</span>
+            <span class="invest-reason">EUV光刻垄断，HBM制造前道工序唯一供应商，每张EUV系统>1.5亿欧</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="invest-tier">
+        <div class="invest-tier-label t3">第三层 · 间接受益</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:20px; font-family:'JetBrains Mono',monospace;">下游需求 · 受益但竞争激烈</div>
+        <div class="invest-item t3">
+          <div>
+            <span class="invest-company">Nvidia</span>
+            <span class="invest-reason">内存瓶颈解决后算力需求爆发的最大受益者，HBM消耗的最大买家</span>
+          </div>
+        </div>
+        <div class="invest-item t3">
+          <div>
+            <span class="invest-company">数据中心REITs</span>
+            <span class="invest-reason">内存密度提升推高功耗，冷却基础设施需求，Anthropic已签5GW+级协议</span>
+          </div>
+        </div>
+        <div class="invest-item t3">
+          <div>
+            <span class="invest-company">先进封装材料</span>
+            <span class="invest-reason">铜互联、硅中介层，HBM堆叠层数增加推动材料需求，ASE Technology受益</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="font-size:18px; margin: 40px 0 20px; font-family:'Playfair Display',serif; color:var(--accent);">⚠ 需要警惕的反向风险</h3>
+
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>风险因素</th>
+          <th>发生概率</th>
+          <th>影响程度</th>
+          <th>缓解路径</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>架构革命</strong><br><small>光子计算/存内计算成熟</small></td>
+          <td><span class="badge badge-teal">低（5-10年）</span></td>
+          <td><span class="badge badge-red">极高</span></td>
+          <td>技术路径观察期较长，短期不构成威胁</td>
+        </tr>
+        <tr>
+          <td><strong>模型效率突破</strong><br><small>蒸馏/量化使内存需求下降</small></td>
+          <td><span class="badge badge-gold">中</span></td>
+          <td><span class="badge badge-gold">中</span></td>
+          <td>历史上效率提升总被规模扩张抵消</td>
+        </tr>
+        <tr>
+          <td><strong>AI需求侧崩塌</strong><br><small>ROI证伪，资本开支大幅收缩</small></td>
+          <td><span class="badge badge-teal">低</span></td>
+          <td><span class="badge badge-red">极高</span></td>
+          <td>最大黑天鹅，需持续跟踪企业AI ROI数据</td>
+        </tr>
+        <tr>
+          <td><strong>地缘政治</strong><br><small>HBM出口管制，市场碎片化</small></td>
+          <td><span class="badge badge-gold">中高</span></td>
+          <td><span class="badge badge-gold">中高</span></td>
+          <td>中国HBM自研进度（CXMT等）值得追踪</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- SECTION 6: 结论 -->
+<section class="section" id="s6">
+  <div class="container">
+    <div class="section-number">06 · 核心结论</div>
+    <h2 class="section-title">三个投资级别的确定性判断</h2>
+
+    <div class="pullquote">
+      <p>这不是押注AI应用谁能赢，而是押注稀缺生产资料的供给方。AI应用竞争格局未定，但无论谁赢，都要消耗HBM。</p>
+    </div>
+
+    <div class="timeline">
+      <div class="timeline-item">
+        <div class="timeline-year" style="color:var(--accent); font-size:14px;">结论一：HBM是卡脖子的那个</div>
+        <div class="timeline-content">
+          KV Cache在HBM中实时读写的带宽需求（TB/s级）是DDR物理上无法满足的——不是成本问题，是物理约束。Claude Sonnet 4.6在200K上下文、1000并发的企业部署中，KV Cache需求高达50TB HBM，单节点成本约<strong style="color:var(--accent)">$2.5亿</strong>。HBM的单位经济价值密度是LPDDR的约500倍（$5,000/GB vs $10/GB）。
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-year" style="color:var(--teal); font-size:14px;">结论二：上下文长度是HBM需求的乘法器</div>
+        <div class="timeline-content">
+          从32K→1M上下文，HBM的KV Cache需求增长<strong>31倍</strong>。Claude Sonnet 4.6的1M token beta功能一旦规模化，单次请求KV Cache需求达250GB，100并发即需25TB HBM——这是一个非线性跃升，而非线性扩展。
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-year" style="color:var(--gold); font-size:14px;">结论三：LPDDR是受益者而非驱动者</div>
+        <div class="timeline-content">
+          LPDDR5/DDR5的增长是被动的、跟随性的——因HBM溢出（MoE专家offload、超长上下文冷cache）而增长，并非因自身不可替代性。传统DRAM市场预计仅以<strong>3% CAGR</strong>增长至2030年，与HBM的40% CAGR形成鲜明对比。在当前时间点，HBM供应链（尤其是SK海力士+台积电CoWoS）是这个逻辑下最确定性的投资标的。
+        </div>
+      </div>
+    </div>
+
+    <div class="callout" data-icon="★">
+      <h4>最终判断</h4>
+      <p>这一系列分析的核心洞见高度成立，前瞻性强：<strong>"唯一限制这个差距拉大的，只有产能扩充的速度"</strong>——这直接指向了投资机会的本质。HBM的供需紧张程度远超LPDDR5，需求曲线的斜率根本不在一个维度上，而产能扩充速度两者都受限于先进封装产能（CoWoS），这才是真正的瓶颈，也是真正的投资护城河所在。</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="report-footer">
+  <p>AI内存消耗结构性分析报告 · 基于Claude Sonnet 4.6对话生成 · 2026年5月</p>
+  <p style="margin-top:8px; font-size:10px; opacity:0.6;">数据来源：SK海力士、Micron、美银证券、高盛、Yole Group、Counterpoint Research等公开资料 · 市场预测仅供参考，不构成投资建议</p>
+</footer>
+
+<script>
+// Intersection Observer for scroll animations
+const sections = document.querySelectorAll('.section');
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+      // Animate bars within this section
+      entry.target.querySelectorAll('.bar-fill').forEach((bar, i) => {
+        const width = bar.getAttribute('data-width') || '50%';
+        setTimeout(() => {
+          bar.style.width = width;
+          bar.style.animation = 'none';
+          bar.style.transform = 'scaleX(0)';
+          bar.offsetHeight; // reflow
+          bar.style.animation = '';
+          bar.style.transition = `transform 1.2s cubic-bezier(0.4,0,0.2,1) ${i * 0.15}s`;
+          bar.style.transform = 'scaleX(1)';
+        }, 100);
+      });
+    }
+  });
+}, { threshold: 0.1 });
+
+sections.forEach(s => observer.observe(s));
+
+// TOC navigation
+function scrollToSection(id) {
+  document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
+}
+
+// TOC active state
+const allSections = document.querySelectorAll('.section, .cover');
+const dots = document.querySelectorAll('.toc-dot');
+
+const sectIds = ['cover', 's1', 's2', 's3', 's4', 's5', 's6'];
+
+window.addEventListener('scroll', () => {
+  const scrollY = window.scrollY + window.innerHeight / 2;
+  let active = 0;
+  sectIds.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el && el.offsetTop <= scrollY) active = i;
+  });
+  dots.forEach((d, i) => d.classList.toggle('active', i === active));
+});
+
+// Initialize bars with CSS custom property
+document.querySelectorAll('.bar-fill').forEach(bar => {
+  const w = bar.getAttribute('data-width') || '50%';
+  bar.style.setProperty('--target-width', w);
+});
+</script>
+</body>
+</html>
